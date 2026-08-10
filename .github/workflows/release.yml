@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. v1.0.1)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync VERSION from tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          VER="${TAG#v}"
+          echo "$VER" > VERSION
+          echo "VERSION=$VER" >> "$GITHUB_ENV"
+          echo "TAG=v$VER" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements-build.txt
+
+      - name: Fetch ffmpeg
+        run: python scripts/fetch_ffmpeg.py --platform windows-x64
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/VKVideoDownloader.spec --noconfirm --clean
+
+      - name: Pack zip
+        shell: bash
+        run: |
+          mkdir -p dist/portable
+          cp VERSION dist/VKVideoDownloader/
+          cd dist
+          powershell -Command "Compress-Archive -Path VKVideoDownloader -DestinationPath portable/VKVideoDownloader-windows-x64.zip -Force"
+          ls -lh portable/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/portable/VKVideoDownloader-windows-x64.zip
+
+  release:
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: release-assets
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

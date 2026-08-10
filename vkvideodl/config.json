@@ -1,0 +1,7 @@
+{
+  "name": "VK Video Downloader",
+  "github_repo": "nix2open/vk-video-downloader",
+  "github_api": "https://api.github.com",
+  "default_port": 8787,
+  "update_asset_prefix": "VKVideoDownloader"
+}

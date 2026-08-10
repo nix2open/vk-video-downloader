@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VK Video Downloader</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-top">
+          <p class="eyebrow">Local content manager</p>
+          <div class="version-box">
+            <span id="versionLabel" class="version-pill">v…</span>
+            <button id="updateBtn" type="button" class="btn btn-ghost">Проверить обновления</button>
+          </div>
+        </div>
+        <h1>VK Video<span>Downloader</span></h1>
+        <p class="lede">
+          Вставьте ссылку на видео VK / VK Video — сервис определит доступные качества и скачает выбранный поток.
+        </p>
+      </header>
+
+      <section class="panel" aria-labelledby="form-title">
+        <h2 id="form-title" class="visually-hidden">Анализ и скачивание</h2>
+
+        <label class="field-label" for="url">Ссылка на видео</label>
+        <div class="url-row">
+          <input
+            id="url"
+            name="url"
+            type="url"
+            inputmode="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://vkvideo.ru/video-3955455_456241169"
+            value="https://vkvideo.ru/video-3955455_456241169"
+          />
+          <button id="analyzeBtn" type="button" class="btn btn-primary">Анализ</button>
+        </div>
+
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+
+        <div id="progressWrap" class="progress-wrap hidden" aria-hidden="true">
+          <div class="progress-meta">
+            <span id="progressLabel">Скачивание…</span>
+            <span id="progressEta"></span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+          <div class="progress-sub">
+            <span id="progressPercent">0%</span>
+            <span id="progressSpeed"></span>
+          </div>
+        </div>
+
+        <div id="result" class="result hidden">
+          <div class="meta">
+            <img id="thumb" class="thumb" alt="" width="160" height="90" />
+            <div class="meta-text">
+              <h3 id="title"></h3>
+              <p id="metaLine" class="meta-line"></p>
+            </div>
+          </div>
+
+          <label class="field-label" for="quality">Качество</label>
+          <div class="quality-row">
+            <select id="quality"></select>
+            <button id="downloadBtn" type="button" class="btn btn-accent">Скачать</button>
+          </div>
+          <p id="qualityHint" class="hint"></p>
+        </div>
+      </section>
+
+      <div id="updatePanel" class="panel update-panel hidden">
+        <h3 id="updateTitle">Обновление</h3>
+        <p id="updateBody" class="hint"></p>
+        <div class="update-actions">
+          <button id="applyUpdateBtn" type="button" class="btn btn-accent hidden">Скачать и установить</button>
+          <a id="releaseLink" class="btn btn-ghost hidden" href="#" target="_blank" rel="noopener">Открыть релиз</a>
+        </div>
+      </div>
+
+      <footer class="foot">
+        <p>Движок: yt-dlp · локально · без облака · <span id="footVersion"></span></p>
+      </footer>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
