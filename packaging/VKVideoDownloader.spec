@@ -30,10 +30,18 @@ hiddenimports = [
     "uvicorn.protocols.websockets.auto",
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
+    "vkvideodl",
+    "vkvideodl.server",
+    "vkvideodl.downloader",
+    "vkvideodl.updater",
+    "vkvideodl.jobs",
+    "vkvideodl.paths",
+    "tkinter",
+    "tkinter.font",
     "webview",
 ]
 
-for pkg in ("yt_dlp", "uvicorn", "anyio", "starlette", "fastapi"):
+for pkg in ("yt_dlp", "uvicorn", "anyio", "starlette", "fastapi", "tkinter"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

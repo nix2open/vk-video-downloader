@@ -1,4 +1,4 @@
-"""Desktop entrypoint: local server + browser/webview UI."""
+"""Desktop entrypoint: local server + visible host window / browser UI."""
 
 from __future__ import annotations
 
@@ -9,26 +9,26 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from pathlib import Path
 
 
-def _patch_stdio_for_windowed() -> Path | None:
-    """PyInstaller console=False leaves sys.stdout/stderr as None on Windows.
+def _app_base() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
-    Uvicorn's ColorFormatter calls stdout.isatty() and crashes without this.
-    """
-    log_path: Path | None = None
+
+def _patch_stdio_for_windowed() -> Path:
+    """PyInstaller console=False leaves sys.stdout/stderr as None on Windows."""
+    base = _app_base()
+    log_path = base / "vk-video-downloader.log"
     try:
-        if getattr(sys, "frozen", False):
-            base = Path(sys.executable).resolve().parent
-        else:
-            base = Path(__file__).resolve().parent
-        log_path = base / "vk-video-downloader.log"
         log_file = open(log_path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
     except OSError:
         log_file = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
-        log_path = None
+        log_path = base / "vk-video-downloader.log"
 
     class _Stream:
         def __init__(self, *streams):
@@ -73,25 +73,24 @@ def _patch_stdio_for_windowed() -> Path | None:
     if sys.stderr is None:
         sys.stderr = _Stream(log_file)
 
-    # Also attach a basic file logger for unexpected errors
-    if log_path is not None:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(message)s",
-            handlers=[logging.FileHandler(log_path, encoding="utf-8")],
-            force=False,
-        )
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(log_path, encoding="utf-8")],
+        force=True,
+    )
     return log_path
 
 
-_patch_stdio_for_windowed()
+LOG_PATH = _patch_stdio_for_windowed()
+log = logging.getLogger("launcher")
 
 import uvicorn
 
 from vkvideodl.paths import ensure_ffmpeg_on_path, read_version
+from vkvideodl.server import app as fastapi_app
 from vkvideodl.updater import load_config
 
-# Avoid uvicorn ColorFormatter (uses stdout.isatty) entirely.
 SAFE_LOG_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -125,6 +124,18 @@ SAFE_LOG_CONFIG = {
 }
 
 
+def _message_box(title: str, text: str) -> None:
+    if not sys.platform.startswith("win"):
+        print(f"{title}: {text}")
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(0, text, title, 0x10 if "ошиб" in text.lower() or "fail" in text.lower() else 0x40)
+    except Exception:
+        pass
+
+
 def _free_port(preferred: int) -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -136,7 +147,7 @@ def _free_port(preferred: int) -> int:
             return int(sock.getsockname()[1])
 
 
-def _wait_ready(host: str, port: int, timeout: float = 20.0) -> bool:
+def _wait_ready(host: str, port: int, timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -147,22 +158,104 @@ def _wait_ready(host: str, port: int, timeout: float = 20.0) -> bool:
     return False
 
 
+def _run_status_window(url: str, version: str, server: uvicorn.Server) -> None:
+    """Visible host window so the process stays alive and the user sees something."""
+    import tkinter as tk
+    from tkinter import font as tkfont
+
+    root = tk.Tk()
+    root.title(f"VK Video Downloader v{version}")
+    root.geometry("460x220")
+    root.configure(bg="#0f1412")
+    root.resizable(False, False)
+
+    title_font = tkfont.Font(family="Segoe UI", size=14, weight="bold")
+    body_font = tkfont.Font(family="Segoe UI", size=10)
+
+    tk.Label(
+        root,
+        text="VK Video Downloader",
+        fg="#e8f0ea",
+        bg="#0f1412",
+        font=title_font,
+    ).pack(pady=(22, 6))
+
+    tk.Label(
+        root,
+        text=f"Сервер запущен\n{url}",
+        fg="#9aafa3",
+        bg="#0f1412",
+        font=body_font,
+        justify="center",
+    ).pack(pady=4)
+
+    tk.Label(
+        root,
+        text="Закройте это окно, чтобы остановить программу.",
+        fg="#9aafa3",
+        bg="#0f1412",
+        font=body_font,
+    ).pack(pady=(4, 12))
+
+    btn_row = tk.Frame(root, bg="#0f1412")
+    btn_row.pack(pady=8)
+
+    def open_ui() -> None:
+        webbrowser.open(url)
+
+    def quit_app() -> None:
+        server.should_exit = True
+        root.destroy()
+
+    tk.Button(
+        btn_row,
+        text="Открыть интерфейс",
+        command=open_ui,
+        bg="#2f9e78",
+        fg="#04140e",
+        activebackground="#3bb589",
+        relief="flat",
+        padx=14,
+        pady=8,
+        font=body_font,
+    ).pack(side="left", padx=6)
+
+    tk.Button(
+        btn_row,
+        text="Выход",
+        command=quit_app,
+        bg="#1f2924",
+        fg="#e8f0ea",
+        activebackground="#2a3831",
+        relief="flat",
+        padx=14,
+        pady=8,
+        font=body_font,
+    ).pack(side="left", padx=6)
+
+    root.protocol("WM_DELETE_WINDOW", quit_app)
+    root.after(400, open_ui)
+    root.mainloop()
+
+
 def main(argv: list[str] | None = None) -> int:
+    log.info("Starting VK Video Downloader v%s (frozen=%s)", read_version(), getattr(sys, "frozen", False))
     ensure_ffmpeg_on_path()
     cfg = load_config()
     parser = argparse.ArgumentParser(description="VK Video Downloader")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(cfg.get("default_port", 8787)))
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--webview", action="store_true", help="Use native WebView2 window when available")
+    parser.add_argument("--webview", action="store_true", help="Use native WebView window instead of browser")
     args = parser.parse_args(argv)
 
     host = args.host
     port = _free_port(args.port)
     url = f"http://{host}:{port}/"
+    version = read_version()
 
     config = uvicorn.Config(
-        "vkvideodl.server:app",
+        fastapi_app,
         host=host,
         port=port,
         log_level="info",
@@ -171,23 +264,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     server = uvicorn.Server(config)
 
-    thread = threading.Thread(target=server.run, daemon=True)
+    # Non-daemon: keep process semantics clearer while UI loop runs
+    thread = threading.Thread(target=server.run, name="uvicorn", daemon=True)
     thread.start()
 
     if not _wait_ready(host, port):
-        print("Failed to start local server", file=sys.stderr)
+        msg = (
+            "Не удалось запустить локальный сервер.\n\n"
+            f"Подробности в файле:\n{LOG_PATH}"
+        )
+        log.error("Server failed to become ready on %s:%s", host, port)
+        _message_box("VK Video Downloader", msg)
         return 1
 
-    print(f"VK Video Downloader v{read_version()}")
+    log.info("Server ready at %s", url)
+    print(f"VK Video Downloader v{version}")
     print(f"UI: {url}")
 
-    use_webview = args.webview
-    if use_webview or sys.platform.startswith("win"):
+    if args.webview:
         try:
             import webview  # type: ignore
 
             webview.create_window(
-                f"VK Video Downloader v{read_version()}",
+                f"VK Video Downloader v{version}",
                 url,
                 width=980,
                 height=820,
@@ -197,18 +296,49 @@ def main(argv: list[str] | None = None) -> int:
             server.should_exit = True
             return 0
         except Exception as exc:  # noqa: BLE001
-            print(f"WebView unavailable ({exc}), opening system browser…")
+            log.exception("WebView failed: %s", exc)
+            _message_box(
+                "VK Video Downloader",
+                f"WebView недоступен ({exc}).\nОткрываю через браузер.",
+            )
 
-    if not args.no_browser:
-        webbrowser.open(url)
-
+    # Default reliable path: status window + system browser
     try:
-        while thread.is_alive():
-            thread.join(timeout=0.5)
-    except KeyboardInterrupt:
-        server.should_exit = True
+        if not args.no_browser:
+            # Also opened from the status window; open once early for faster UX
+            webbrowser.open(url)
+        _run_status_window(url, version, server)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("UI host failed: %s", exc)
+        if not args.no_browser:
+            webbrowser.open(url)
+        _message_box(
+            "VK Video Downloader",
+            f"Окно статуса недоступно ({exc}).\n"
+            f"Интерфейс: {url}\n"
+            f"Лог: {LOG_PATH}\n\n"
+            "Сервер работает, пока этот процесс жив. Закройте его в Диспетчере задач для остановки.",
+        )
+        try:
+            while thread.is_alive():
+                thread.join(timeout=0.5)
+        except KeyboardInterrupt:
+            pass
+
+    server.should_exit = True
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        details = traceback.format_exc()
+        log.error("Fatal error:\n%s", details)
+        _message_box(
+            "VK Video Downloader — ошибка",
+            f"Критическая ошибка при запуске.\n\n{details[-800:]}\n\nЛог:\n{LOG_PATH}",
+        )
+        raise
