@@ -5,6 +5,7 @@ __pycache__/
 downloads/
 updates/
 ffmpeg/
+*.log
 dist/
 build/
 *.mp4
