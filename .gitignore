@@ -20,3 +20,4 @@ build/
 .vscode/
 *.spec.bak
 packaging/icon.ico
+settings.json

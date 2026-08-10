@@ -10,8 +10,10 @@ import sys
 import threading
 import time
 import traceback
-import webbrowser
 from pathlib import Path
+
+# ... keep patch, then:
+from vkvideodl.settings import open_default_browser
 
 
 def _app_base() -> Path:
@@ -89,6 +91,7 @@ import uvicorn
 
 from vkvideodl.paths import ensure_ffmpeg_on_path, read_version
 from vkvideodl.server import app as fastapi_app
+from vkvideodl.settings import open_default_browser
 from vkvideodl.updater import load_config
 
 SAFE_LOG_CONFIG = {
@@ -201,7 +204,7 @@ def _run_status_window(url: str, version: str, server: uvicorn.Server) -> None:
     btn_row.pack(pady=8)
 
     def open_ui() -> None:
-        webbrowser.open(url)
+        open_default_browser(url)
 
     def quit_app() -> None:
         server.should_exit = True
@@ -305,13 +308,12 @@ def main(argv: list[str] | None = None) -> int:
     # Default reliable path: status window + system browser
     try:
         if not args.no_browser:
-            # Also opened from the status window; open once early for faster UX
-            webbrowser.open(url)
+            open_default_browser(url)
         _run_status_window(url, version, server)
     except Exception as exc:  # noqa: BLE001
         log.exception("UI host failed: %s", exc)
         if not args.no_browser:
-            webbrowser.open(url)
+            open_default_browser(url)
         _message_box(
             "VK Video Downloader",
             f"Окно статуса недоступно ({exc}).\n"

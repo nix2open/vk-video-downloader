@@ -36,6 +36,7 @@ hiddenimports = [
     "vkvideodl.updater",
     "vkvideodl.jobs",
     "vkvideodl.paths",
+    "vkvideodl.settings",
     "tkinter",
     "tkinter.font",
     "webview",

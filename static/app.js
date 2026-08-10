@@ -4,6 +4,10 @@ const urlInput = $("url");
 const analyzeBtn = $("analyzeBtn");
 const downloadBtn = $("downloadBtn");
 const updateBtn = $("updateBtn");
+const aboutBtn = $("aboutBtn");
+const aboutModal = $("aboutModal");
+const aboutCloseBtn = $("aboutCloseBtn");
+const aboutVersion = $("aboutVersion");
 const applyUpdateBtn = $("applyUpdateBtn");
 const releaseLink = $("releaseLink");
 const statusEl = $("status");
@@ -24,10 +28,16 @@ const updateTitle = $("updateTitle");
 const updateBody = $("updateBody");
 const versionLabel = $("versionLabel");
 const footVersion = $("footVersion");
+const downloadDirInput = $("downloadDir");
+const chooseDirBtn = $("chooseDirBtn");
+const savedRow = $("savedRow");
+const savedPathEl = $("savedPath");
+const openFolderBtn = $("openFolderBtn");
 
 let currentUrl = "";
 let latestUpdate = null;
 let activeSource = null;
+let lastSavedPath = "";
 
 function setStatus(message, kind = "") {
   statusEl.textContent = message;
@@ -99,7 +109,6 @@ function watchJob(jobId) {
       }
     };
     es.onerror = () => {
-      // Fallback poll once on stream error
       fetch(`/api/jobs/${jobId}`)
         .then((r) => r.json())
         .then((job) => {
@@ -122,6 +131,7 @@ function watchJob(jobId) {
 function renderResult(data) {
   currentUrl = data.webpage_url || urlInput.value.trim();
   titleEl.textContent = data.title;
+  savedRow.classList.add("hidden");
 
   const bits = [];
   if (data.uploader) bits.push(data.uploader);
@@ -158,6 +168,35 @@ function renderResult(data) {
 function updateHint() {
   const selected = qualityEl.selectedOptions[0];
   qualityHintEl.textContent = selected?.dataset.description || "";
+}
+
+async function loadSettings() {
+  try {
+    const res = await fetch("/api/settings");
+    const data = await res.json();
+    downloadDirInput.value = data.download_dir || "";
+  } catch {
+    downloadDirInput.value = "";
+  }
+}
+
+async function chooseDir() {
+  chooseDirBtn.disabled = true;
+  try {
+    const res = await fetch("/api/settings/choose-dir", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(errorDetail(data, res.status));
+    if (data.cancelled) {
+      setStatus("Выбор папки отменён.");
+      return;
+    }
+    downloadDirInput.value = data.download_dir || "";
+    setStatus(`Папка сохранения: ${data.download_dir}`, "ok");
+  } catch (err) {
+    setStatus(err.message || "Не удалось выбрать папку.", "error");
+  } finally {
+    chooseDirBtn.disabled = false;
+  }
 }
 
 async function analyze() {
@@ -200,6 +239,7 @@ async function download() {
 
   downloadBtn.disabled = true;
   analyzeBtn.disabled = true;
+  savedRow.classList.add("hidden");
   setStatus("Скачивание запущено…");
 
   try {
@@ -212,9 +252,11 @@ async function download() {
     if (!res.ok) throw new Error(errorDetail(data, res.status));
 
     const job = await watchJob(data.job_id);
+    lastSavedPath = job.saved_path || "";
     setStatus(`Готово: ${job.filename} (${job.size_display || ""})`, "ok");
-    if (job.download_url) {
-      window.location.assign(job.download_url);
+    if (lastSavedPath) {
+      savedPathEl.textContent = `Сохранено: ${lastSavedPath}`;
+      savedRow.classList.remove("hidden");
     }
   } catch (err) {
     setStatus(err.message || "Ошибка скачивания.", "error");
@@ -224,16 +266,40 @@ async function download() {
   }
 }
 
+async function openSavedFolder() {
+  if (!lastSavedPath) return;
+  try {
+    const res = await fetch("/api/settings/open-path", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: lastSavedPath }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(errorDetail(data, res.status));
+  } catch (err) {
+    setStatus(err.message || "Не удалось открыть папку.", "error");
+  }
+}
+
 async function loadVersion() {
   try {
     const res = await fetch("/api/version");
     const data = await res.json();
     versionLabel.textContent = `v${data.version}`;
     footVersion.textContent = `v${data.version}`;
+    aboutVersion.textContent = `Версия ${data.version}`;
     latestUpdate = { frozen: data.frozen, ...data };
   } catch {
     versionLabel.textContent = "v?";
   }
+}
+
+function showAbout() {
+  aboutModal.classList.remove("hidden");
+}
+
+function hideAbout() {
+  aboutModal.classList.add("hidden");
 }
 
 async function checkUpdates() {
@@ -305,6 +371,13 @@ analyzeBtn.addEventListener("click", analyze);
 downloadBtn.addEventListener("click", download);
 updateBtn.addEventListener("click", checkUpdates);
 applyUpdateBtn.addEventListener("click", applyUpdate);
+chooseDirBtn.addEventListener("click", chooseDir);
+openFolderBtn.addEventListener("click", openSavedFolder);
+aboutBtn.addEventListener("click", showAbout);
+aboutCloseBtn.addEventListener("click", hideAbout);
+aboutModal.addEventListener("click", (e) => {
+  if (e.target === aboutModal) hideAbout();
+});
 qualityEl.addEventListener("change", updateHint);
 urlInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
@@ -314,3 +387,4 @@ urlInput.addEventListener("keydown", (e) => {
 });
 
 loadVersion();
+loadSettings();

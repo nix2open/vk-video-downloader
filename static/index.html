@@ -15,6 +15,7 @@
           <div class="version-box">
             <span id="versionLabel" class="version-pill">v…</span>
             <button id="updateBtn" type="button" class="btn btn-ghost">Проверить обновления</button>
+            <button id="aboutBtn" type="button" class="btn btn-ghost">О программе</button>
           </div>
         </div>
         <h1>VK Video<span>Downloader</span></h1>
@@ -25,6 +26,12 @@
 
       <section class="panel" aria-labelledby="form-title">
         <h2 id="form-title" class="visually-hidden">Анализ и скачивание</h2>
+
+        <label class="field-label" for="downloadDir">Папка сохранения</label>
+        <div class="url-row">
+          <input id="downloadDir" type="text" readonly spellcheck="false" />
+          <button id="chooseDirBtn" type="button" class="btn btn-ghost">Обзор…</button>
+        </div>
 
         <label class="field-label" for="url">Ссылка на видео</label>
         <div class="url-row">
@@ -72,6 +79,10 @@
             <button id="downloadBtn" type="button" class="btn btn-accent">Скачать</button>
           </div>
           <p id="qualityHint" class="hint"></p>
+          <div id="savedRow" class="saved-row hidden">
+            <p id="savedPath" class="hint"></p>
+            <button id="openFolderBtn" type="button" class="btn btn-ghost">Открыть папку</button>
+          </div>
         </div>
       </section>
 
@@ -85,9 +96,20 @@
       </div>
 
       <footer class="foot">
-        <p>Движок: yt-dlp · локально · без облака · <span id="footVersion"></span></p>
+        <p><span id="footVersion"></span></p>
       </footer>
     </main>
+
+    <div id="aboutModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+      <div class="modal-card">
+        <h3 id="aboutTitle">О программе</h3>
+        <p class="about-name">VK Video Downloader</p>
+        <p class="about-line">Сделано для <strong>Vadimus</strong> от <strong>NIX</strong></p>
+        <p id="aboutVersion" class="hint"></p>
+        <button id="aboutCloseBtn" type="button" class="btn btn-primary">Закрыть</button>
+      </div>
+    </div>
+
     <script src="/app.js" type="module"></script>
   </body>
 </html>

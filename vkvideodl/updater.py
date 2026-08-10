@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Callable
@@ -17,6 +19,9 @@ from urllib.request import Request, urlopen
 from vkvideodl.paths import app_dir, is_frozen, read_version, resource_dir, updates_dir
 
 ProgressCb = Callable[[dict[str, Any]], None]
+log = logging.getLogger("updater")
+
+EXE_NAME = "VKVideoDownloader.exe"
 
 
 def load_config() -> dict[str, Any]:
@@ -165,22 +170,122 @@ def _download_file(url: str, dest: Path, progress_cb: ProgressCb | None = None) 
                 )
 
 
+def _find_payload_root(staging: Path) -> tuple[Path, Path]:
+    """Return (payload_root, exe_path) inside extracted update."""
+    preferred = list(staging.rglob(EXE_NAME))
+    if not preferred:
+        preferred = [
+            p
+            for p in staging.rglob("*.exe")
+            if p.is_file() and "updater" not in p.name.lower()
+        ]
+    if not preferred:
+        raise RuntimeError(
+            f"В архиве обновления не найден {EXE_NAME}. "
+            "Скачайте zip вручную со страницы релизов."
+        )
+    exe = preferred[0]
+    return exe.parent, exe
+
+
+def _prepare_staging_from_zip(zip_path: Path) -> tuple[Path, str]:
+    staging = updates_dir() / "staging"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(staging)
+
+    # Unwrap single top-level folder if present
+    children = [p for p in staging.iterdir()]
+    if len(children) == 1 and children[0].is_dir():
+        inner = children[0]
+        tmp = updates_dir() / "staging_unwrap"
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+        inner.rename(tmp)
+        shutil.rmtree(staging, ignore_errors=True)
+        tmp.rename(staging)
+
+    payload_root, exe = _find_payload_root(staging)
+    if payload_root.resolve() != staging.resolve():
+        flat = updates_dir() / "staging_flat"
+        if flat.exists():
+            shutil.rmtree(flat, ignore_errors=True)
+        shutil.copytree(payload_root, flat)
+        shutil.rmtree(staging, ignore_errors=True)
+        flat.rename(staging)
+        exe = staging / exe.name
+        if not exe.exists():
+            _, exe = _find_payload_root(staging)
+
+    if not exe.exists():
+        raise RuntimeError(f"Не удалось подготовить {EXE_NAME} для установки.")
+
+    return staging, exe.name
+
+
 def _write_windows_updater(install_dir: Path, staging: Path, exe_name: str) -> Path:
     script = updates_dir() / "apply_update.bat"
-    # Escape for batch
+    log_file = updates_dir() / "update.log"
     install = str(install_dir)
     stage = str(staging)
+    log_path = str(log_file)
+    # Wait until current process releases file locks, then robocopy and relaunch.
     lines = [
         "@echo off",
-        "setlocal",
-        "echo Applying VK Video Downloader update...",
+        "setlocal EnableExtensions",
+        f'set "LOG={log_path}"',
+        f'set "INSTALL={install}"',
+        f'set "STAGE={stage}"',
+        f'set "EXE={exe_name}"',
+        "echo ===== VK Video Downloader update =====>>\"%LOG%\"",
+        "echo start %DATE% %TIME%>>\"%LOG%\"",
+        "echo INSTALL=%INSTALL%>>\"%LOG%\"",
+        "echo STAGE=%STAGE%>>\"%LOG%\"",
+        "echo EXE=%EXE%>>\"%LOG%\"",
+        "",
+        "rem Wait until old process exits (max ~60s)",
+        "set /a _n=0",
+        ":wait_exit",
+        "set /a _n+=1",
+        'tasklist /FI "IMAGENAME eq %EXE%" | find /I "%EXE%" >nul',
+        "if errorlevel 1 goto unlocked",
+        "if %_n% GEQ 60 (",
+        "  echo timeout waiting for process exit>>\"%LOG%\"",
+        "  goto unlocked",
+        ")",
+        "timeout /t 1 /nobreak >nul",
+        "goto wait_exit",
+        "",
+        ":unlocked",
         "timeout /t 2 /nobreak >nul",
-        f'xcopy /E /Y /I "{stage}\\*" "{install}\\"',
-        f'cd /d "{install}"',
-        f'start "" "{install}\\{exe_name}"',
-        f'rmdir /S /Q "{stage}"',
+        "",
+        'if not exist "%STAGE%\\%EXE%" (',
+        "  echo FATAL: staging exe missing>>\"%LOG%\"",
+        "  exit /b 1",
+        ")",
+        "",
+        'robocopy "%STAGE%" "%INSTALL%" /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS /XD updates',
+        "set RC=%ERRORLEVEL%",
+        "echo robocopy exit=%RC%>>\"%LOG%\"",
+        "if %RC% GEQ 8 (",
+        "  echo FATAL: robocopy failed>>\"%LOG%\"",
+        "  exit /b 1",
+        ")",
+        "",
+        'if not exist "%INSTALL%\\%EXE%" (',
+        "  echo FATAL: install exe missing after copy>>\"%LOG%\"",
+        "  exit /b 1",
+        ")",
+        "",
+        'echo launching "%INSTALL%\\%EXE%">>\"%LOG%\"',
+        'start "" /D "%INSTALL%" "%INSTALL%\\%EXE%"',
+        'rmdir /S /Q "%STAGE%" >nul 2>&1',
+        "echo done %DATE% %TIME%>>\"%LOG%\"",
         "endlocal",
-        "del \"%~f0\"",
+        'del "%~f0" >nul 2>&1',
     ]
     script.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
     return script
@@ -191,12 +296,12 @@ def _write_unix_updater(install_dir: Path, staging: Path, exe_name: str) -> Path
     content = f"""#!/bin/bash
 set -e
 sleep 2
-rsync -a --delete "{staging}/" "{install_dir}/" 2>/dev/null || cp -R "{staging}/." "{install_dir}/"
+rsync -a "{staging}/" "{install_dir}/" 2>/dev/null || cp -R "{staging}/." "{install_dir}/"
 cd "{install_dir}"
 if [ -x "./{exe_name}" ]; then
   nohup "./{exe_name}" >/dev/null 2>&1 &
-elif [ -x "./launcher" ]; then
-  nohup "./launcher" >/dev/null 2>&1 &
+elif [ -x "./VKVideoDownloader" ]; then
+  nohup "./VKVideoDownloader" >/dev/null 2>&1 &
 fi
 rm -rf "{staging}"
 rm -f "$0"
@@ -214,33 +319,30 @@ def apply_downloaded_update(zip_path: Path, progress_cb: ProgressCb | None = Non
         )
 
     install_dir = app_dir()
-    staging = updates_dir() / "staging"
-    if staging.exists():
-        shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True, exist_ok=True)
+    if progress_cb:
+        progress_cb({"status": "processing", "percent": 85, "message": "Распаковка…"})
+
+    staging, exe_name = _prepare_staging_from_zip(zip_path)
+    log.info("Update payload ready: staging=%s exe=%s", staging, exe_name)
 
     if progress_cb:
-        progress_cb({"status": "processing", "percent": 90, "message": "Распаковка…"})
+        progress_cb({"status": "processing", "percent": 95, "message": "Подготовка установки…"})
 
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(staging)
-
-    # If zip contains a single root folder, use its contents
-    children = [p for p in staging.iterdir()]
-    if len(children) == 1 and children[0].is_dir():
-        inner = children[0]
-        tmp = updates_dir() / "staging_flat"
-        if tmp.exists():
-            shutil.rmtree(tmp, ignore_errors=True)
-        inner.rename(tmp)
-        shutil.rmtree(staging, ignore_errors=True)
-        tmp.rename(staging)
-
-    exe_name = Path(sys.executable).name
     if platform.system() == "Windows":
         script = _write_windows_updater(install_dir, staging, exe_name)
-        subprocess.Popen(["cmd", "/c", str(script)], close_fds=True)
+        flags = 0
+        if hasattr(subprocess, "DETACHED_PROCESS"):
+            flags |= subprocess.DETACHED_PROCESS
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(
+            ["cmd", "/c", str(script)],
+            cwd=str(install_dir),
+            close_fds=True,
+            creationflags=flags,
+        )
     else:
+        exe_name = Path(sys.executable).name
         script = _write_unix_updater(install_dir, staging, exe_name)
         subprocess.Popen(["/bin/bash", str(script)], close_fds=True, start_new_session=True)
 
@@ -249,11 +351,13 @@ def apply_downloaded_update(zip_path: Path, progress_cb: ProgressCb | None = Non
             {
                 "status": "done",
                 "percent": 100,
-                "message": "Обновление установлено. Приложение перезапускается…",
+                "message": "Обновление готово. Приложение перезапускается…",
             }
         )
 
-    return {"ok": True, "restarting": True, "script": str(script)}
+    # Small delay so the helper process is scheduled before we kill ourselves
+    time.sleep(0.8)
+    return {"ok": True, "restarting": True, "script": str(script), "exe_name": exe_name}
 
 
 def download_and_apply_update(
@@ -267,12 +371,6 @@ def download_and_apply_update(
     if progress_cb:
         progress_cb({"status": "downloading", "percent": 0, "message": "Скачивание обновления…"})
     _download_file(asset_url, dest, progress_cb=progress_cb)
+    if progress_cb:
+        progress_cb({"status": "processing", "percent": 80, "message": "Архив скачан, установка…"})
     return apply_downloaded_update(dest, progress_cb=progress_cb)
-
-
-def open_release_page(url: str | None) -> None:
-    if not url:
-        return
-    import webbrowser
-
-    webbrowser.open(url)
