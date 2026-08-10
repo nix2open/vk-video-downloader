@@ -22,7 +22,13 @@ VK_HOSTS = {
     "live.vkvideo.ru",
 }
 
-VIDEO_ID_RE = re.compile(r"(?:video|clip)(-?\d+)_(\d+)", re.IGNORECASE)
+VIDEO_ID_RE = re.compile(r"(?:video|clip|live)(-?\d+)_(\d+)", re.IGNORECASE)
+
+# https://vkvideo.ru/live-123_456 → https://vkvideo.ru/video-123_456
+LIVE_PREFIX_RE = re.compile(
+    r"(https?://[^/\s]+/)live(-?\d+_\d+)",
+    re.IGNORECASE,
+)
 
 HTTP_HEADERS = {
     "User-Agent": (
@@ -34,10 +40,18 @@ HTTP_HEADERS = {
 }
 
 
-def validate_vk_url(url: str) -> str:
+def normalize_vk_url(url: str) -> str:
+    """Normalize user-pasted VK links before analyze/download."""
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    # Live pages share the same media id as VOD; yt-dlp expects /video-…
+    url = LIVE_PREFIX_RE.sub(r"\1video\2", url, count=1)
+    return url
+
+
+def validate_vk_url(url: str) -> str:
+    url = normalize_vk_url(url)
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if host not in VK_HOSTS:
